@@ -1,0 +1,137 @@
+##-------------------------- 1:standard analysis -----------------------------#
+# download reference fasta
+# wget ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/technical/reference/human_g1k_v37.fasta.gz
+# download  gene annotation gtf (gencode)
+# http://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_29/GRCh37_mapping/gencode.v29lift37.annotation.gtf.gz
+# download rmsk
+# http://hgdownload.cse.ucsc.edu/goldenPath/hg19/database/rmsk.txt.gz
+# download segdup
+# http://hgdownload.cse.ucsc.edu/goldenPath/hg19/database/genomicSuperDups.txt.gz
+## standard analysis  call sv ##
+# ngmlr
+ngmlr -t 20 -x ont -r human_g1k_v37.fasta -q $sample.pass.fastq|samtools sort - -@ 10 -o $sample.ngmlr.sorted.bam 
+# sniffles
+sniffles -m $sample.ngmlr.bam --report_BND --ignore_sd -q 0 -n -1 -t 8 -l 50 -s 1 --genotype -v $sample.sniffles.vcf
+
+##-------------------------- 2: sv merge --------------------------------------#
+# vcffile list
+ls *.sniffles.vcf >fofn
+
+# A1: sv merge
+dbSV_merge -f fofn -d 1000 -l 2 -r 0.5 -o svmergefile >mergelog1 2>&1
+# A2: svmerge To merge VCF
+python2 script/mergevcf2vcf.py --merge svmergefile --vcflist fofn -o allsamples.svmerge.vcf
+# A3: vcf To matrix
+python2 script/vcf2matrix.py allsamples.svmerge.vcf >allsamples.svmerge.matrix.xls
+# A4 vcf annotation
+python2 script/sv_filter.py --vcf allsamples.svmerge.vcf --prefix allsamples.svmerge --outdir annot/
+python3 script/svannot.py --bed annot/allsamples.svmerge.bed --prefix Tibetan-Han --ref_version hg19 --db annovar.database/humandb/ --annovar table_annovar.pl --outdir annot/ > annovar.log 2>&1
+
+## B: merge g1000
+# wget ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/phase3/integrated_sv_map/ALL.wgs.integrated_sv_map_v2.20130502.svs.genotypes.vcf.gz
+echo -e "allsamples.svmerge.vcf\nALL.wgs.integrated_sv_map_v2.20130502.svs.genotypes.1000genome.vcf" >fofn2
+dbSV_merge -f fofn2 -l 2 -r 0.5 -o g1000mergevcf >mergelog2 2>&1
+python script/mergevcf2vcf1000intersect.py g1000mergevcf fofn2 >usandgenotypes.1000genomeintersect.vcf
+python2 script/vcf2matrix.py usandgenotypes.1000genomeintersect.vcf >usandgenotypes.1000genomeintersect.matrix.xls
+## C: merge g1000 EAS
+echo -e "allsamples.svmerge.vcf\nEAS.wgs.svs.genotypes.vcf" >fofn3
+dbSV_merge -f fofn3 -l 2 -r 0.5 -o EASmergevcf >mergelog3 2>&1
+python script/mergevcf2vcf1000intersect.py EASmergevcf EASvcflist >usandgenotypes.EASgenomeintersect.vcf
+python2 script/vcf2matrix.py usandgenotypes.EASgenomeintersect.vcf >usandgenotypes.EASgenomeintersect.mxtrix.xls
+
+## ------------------------------Figure 1 --------------------------------##
+# Figure1 c
+Rscript script/get_AF.py usandgenotypes.EASgenomeintersect.mxtrix.xls >AL-HT-EAS.af.xls
+Rscript script/draw_EAS_AF.r AL-HT-EAS.af.xls figures/Tibetan-Han-EAS.af.pdf
+# Figure1 d
+windows = 1000
+cut -f1,2 human_g1k_v37.fasta.fai > genome.size
+bedtools makewindows -g genome.size -w $windows > windows.bed.1K.txt
+bedtools nuc -fi human_g1k_v37.fasta -bed windows.bed.1K.txt |cut -f1-3,5 > windows.bed.1K.gc.txt
+Rscript script/circlizesv.r --groupvcf allsamples.svmerge.vcf -o splide/ --windows $windows --splide $windows  # get splide/DEL.splide.counts.xls and splide/INS.splide.counts.xls ...
+Rscript script/circlizesv.r --groupvcf EAS.wgs.svs.genotypes.vcf -o EAS/ --windows $windows --splide $windows  # get EAS/DEL.splide.counts.xls and EAS/INS.splide.counts.xls
+Rscript script/draw_GC_svnum.r windows.bed.1K.gc.txt splide/DEL.splide.counts.xls splide/INS.splide.counts.xls EAS/DEL.splide.counts.xls EAS/INS.splide.counts.xls figures/EAS.DEL--INS.splide.gc.distribution.line.num.pdf
+# Figure1 e 
+# wget https://storage.googleapis.com/gnomad-public/papers/2019-sv/gnomad_v2_sv.sites.vcf.gz  # gnomAD
+echo -e "allsamples.svmerge.vcf\nALL.wgs.integrated_sv_map_v2.20130502.svs.genotypes.1000genome.vcf\ngnomad_v2_sv.sites.vcf" >fofn4
+dbSV_merge -f fofn4 -d 1000 -l 2 -r 0.5 -o gnomADmergefile >mergelog4 2>&1
+Rscript script/gnomAD.venn.r gnomADmergefile figures/genomAD-g1000.venn.png
+# Figure1 F
+#Rscript script/Tibetan-Han.venn.r svmergefile figures/Tibetan-Han.venn.png
+
+## ------------------------------Figure 2 --------------------------------##
+# Figure2 prepare input
+# download promoters 
+# wget https://slidebase.binf.ku.dk/human_promoters/bed #filename: promoter_data_at_2021-05-17_11-17-55
+# download enhangcer
+# https://personal.broadinstitute.org/cboix/epimap/links/links_corr_only/
+# download hic-domain
+# http://3dgenome.fsm.northwestern.edu/publications.html
+bedtools makewindows -g genome.size -w 1000000 > windows.bed.1M.txt
+python2 script/gff2count.py gencode.v29lift37.annotation.gtf windows.bed.1M.txt|cut -f4 >gene-density.bed # 10
+python2 script/gff2count.py allsamples.svmerge.vcf windows.bed.1M.txt >ALLSV-density.bed  # 1
+python2 script/vcf2count.py allsamples.svmerge.vcf windows.bed.1M.txt DEL|cut -f4 >DEL-density.bed # 11
+python2 script/vcf2count.py allsamples.svmerge.vcf windows.bed.1M.txt INS|cut -f4 >INS-density.bed # 13
+python2 script/vcf2count.py allsamples.svmerge.vcf windows.bed.1M.txt DUP|cut -f4 >DUP-density.bed # 12
+python2 script/vcf2count.py allsamples.svmerge.vcf windows.bed.1M.txt INV|cut -f4 >INV-density.bed # 14
+python2 script/vcf2count.py allsamples.svmerge.vcf windows.bed.1M.txt TRA|cut -f4 >TRA-density.bed # 15
+awk '$12~/LINE/{print $6"\t"$7"\t"$8"\t"$12}' rmsk.txt|sed 's/chr//g' >LINE.repeat.bed
+awk '$12~/SINE/{print $6"\t"$7"\t"$8"\t"$12}' rmsk.txt|sed 's/chr//g' >SINE.repeat.bed
+awk '$12~/LTR/{print $6"\t"$7"\t"$8"\t"$12}' rmsk.txt|sed 's/chr//g' >LTR.repeat.bed
+awk '{print $2"\t"$2"\t"$4"\tsegdup"}' genomicSuperDups.txt |sed 's/chr//g' >segdup.repeat.bed # 5
+python2 script/bed2coverage.py LINE.repeat.bed windows.bed.1M.txt|cut -f4 >LINE-coverage.bed # 3
+python2 script/bed2coverage.py SINE.repeat.bed windows.bed.1M.txt|cut -f4 >SINE-coverage.bed # 2
+python2 script/bed2coverage.py LTR.repeat.bed windows.bed.1M.txt|cut -f4 >LTR-coverage.bed # 4
+python2 script/bed2coverage.py segdup.repeat.bed windows.bed.1M.txt|cut -f4 >segdup-coverage.bed
+bedtools intersect -a SINE.repeat.bed -b allsamples.svmerge.hg19_multianno.txt -f 0.5 |awk -F "\t" '!a[$5"\t"$6"\t"$7]++{print $5"\t"$6"\t"$7}' >SINE.repeat.sv.bed 
+bedtools intersect -a LINE.repeat.bed -b allsamples.svmerge.hg19_multianno.txt -f 0.5 |awk -F "\t" '!a[$5"\t"$6"\t"$7]++{print $5"\t"$6"\t"$7}' >LINE.repeat.sv.bed
+bedtools intersect -a LTR.repeat.bed -b allsamples.svmerge.hg19_multianno.txt -f 0.5 |awk -F "\t" '!a[$5"\t"$6"\t"$7]++{print $5"\t"$6"\t"$7}' >LTR.repeat.sv.bed
+bedtools intersect -a segdup.repeat.bed -b allsamples.svmerge.hg19_multianno.txt -f 0.5 |awk -F "\t" '!a[$5"\t"$6"\t"$7]++{print $5"\t"$6"\t"$7}' >segdup.repeat.sv.bed
+python2 script/gff2count.py SINE.repeat.sv.bed windows.bed.1M.txt|cut -f4 >SINE.sv-density.bed # 6
+python2 script/gff2count.py LINE.repeat.sv.bed windows.bed.1M.txt|cut -f4 >LINE.sv-density.bed # 7
+python2 script/gff2count.py LTR.repeat.sv.bed windows.bed.1M.txt|cut -f4 >LTR.sv-density.bed # 8
+python2 script/gff2count.py segdup.repeat.sv.bed windows.bed.1M.txt|cut -f4 >segdup.sv-density.bed # 9
+python2 script/bed2coverage.py cCRE_hg19.ELS.bed windows.bed.1M.txt|cut -f4 > ELS-coverage.bed # 16
+python2 script/bed2coverage.py cCRE_hg19.PLS.bed windows.bed.1M.txt|cut -f4 >PLS-coverage.bed # 17
+python2 script/gff2count.py HiC_H1hesc_boundary.bed windows.bed.1M.txt |cut -f4 > HiC_H1hesc_boundary-density.bed # 18
+python2 script/gff2count.py LAMIN_H1hesc_boundary.bed windows.bed.1M.txt |cut -f4 >LAMIN_H1hesc_boundary-density.bed # 19
+python2 script/bed2coverage.py LAMIN_H1hesc_domains.bed windows.bed.1M.txt|cut -f4 >LAMIN_H1hesc_domains-coverage.bed # 20
+paste ALLSV-density.bed SINE-coverage.bed LINE-coverage.bed LTR-coverage.bed segdup.repeat.bed SINE.sv-density.bed LINE.sv-density.bed LTR.sv-density.bed segdup.sv-density.bed gene-density.bed DEL-density.bed INS-density.bed DUP-density.bed INV-density.bed TRA-density.bed ELS-coverage.bed PLS-coverage.bed HiC_H1hesc_boundary-density.bed LAMIN_H1hesc_boundary-density.bed LAMIN_H1hesc_domains-coverage.bed |sed '1ichrom\tstart\tend\tALLSV\tSINE\tLINE\tLTR\tSegDup\tSINE(SV)\tLINE(SV)\tLTR(SV)\tSegDup(SV)\tGeneDensity\tDEL\tDUP\tINS\tINV\tTRA\tEnhancer\tPromoter\tHiC.boundary.density\tLAMIN_boundary.density\tLAMIN.domains.coverage' >data.input.xls
+sed 's/chr//g' hg19_gap.txt |bedtools intersect -wo -a - -b data.input.xls >data.input.gap.xls  # hg19_gap.txt from annovar_dir
+awk -F "\t" 'NR==FNR{a[$4"\t"$5"\t"$6]=$1;next}NR>FNR{if (!($1"\t"$2"\t"$3 in a)) print $0}' data.input.gap.xls data.input.xls >data.input.nogap.xls
+# Figure2 b
+Rscript script/draw.SV.TE.r data.input.nogap.xls figures/TE.distribution.perchrom.nogap.pdf
+# Figure2 c
+Rscript script/TE-SV.cor.r data.input.nogap.xls figures/TE-SV.corAndP.pearson.nogap.pdf
+
+## ------------------------------Figure 3 --------------------------------##
+# Figure3 prepare data (b)
+vcftools --vcf allsamples.svmerge.vcf --weir-fst-pop Tibetan --weir-fst-pop Han --out Tibetan-Han
+paste Tibetan-Han.weir.fst allsamples.svmerge.matrix.xls >Tibetan-Han.weir.fst.matrix.xls
+awk '$3>0.1' Tibetan-Han.weir.fst.matrix.xls|cut -f4- >FST0.1.AL--HT.weir.fst.matrix.xls
+vcftools --vcf allsamples.svmerge.vcf --plink --out Tibetan-Han
+plink  --noweb --ped Tibetan-Han.ped --map Tibetan-Han.map --make-bed --out Tibetan-Han
+dmixture  --cv Tibetan-Han.bed 2 > k_2
+dmixture  --cv Tibetan-Han.bed 3 > k_3
+dmixture  --cv Tibetan-Han.bed 4 > k_4
+# Figure3 a
+Rscript script/vcfpca.r usandgenotypes.1000genomeintersect.vcf.matrix samplelist genome1000groupSamplelist ./ # get pca.info.xls
+Rscript script/draw_facet_wrap_PCA.r pca.info.xls figures/g1000.PC1-PC6.png
+# Figure3 b1
+Rscript script/drawSructure_frappe.R -s 2 -e 4 -o Tibetan-Han.structure -p samplelist
+# Figure3 b2
+Rscript script/structure.order.r k2.structure.order.xls FST0.1.AL--HT.weir.fst.matrix.xls figures/structure.fst0.1.diff.complete.pdf
+# Figure3 c
+Rscript script/ggtreeVCF.r allsamples.svmerge.matrix.xls samplelist figures/Tibetan-Han
+
+### ------------------------------Figure 4 --------------------------------##
+# Figure4 prepare data
+cut -f1-2 human_g1k_v37.fasta.fai >input/chrom.len
+cp Tibetan-Han.weir.fst input/sv.fst.fordraw.xls
+vcftools --vcf SNP.NGS.vcf --weir-fst-pop Tibetan --weir-fst-pop Han --out SNP  #(from ngs data)
+cp SNP.weir.fst input/snp.fst.fordraw.filter.xls
+vcftools --vcf INDEL.NGS.vcf --weir-fst-pop Tibetan --weir-fst-pop Han --out INDEL #(from ngs data)
+cp INDEL.weir.fst input/indel.fst.fordraw.xls
+awk -F "\"|\t" '$3=="gene"||$3=="exon"{print $1"\t"$4"\t"$5"\t"$10"\t"$3}' gencode.v29lift37.annotation.gtf|bgzip -c  >input/hg19.bed.gtf.gz
+## Figure4  a+b+c+d
+Rscript script/Union.manhattan.r figures/union.manhattan.3.pdf 3
