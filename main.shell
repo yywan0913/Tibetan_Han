@@ -28,7 +28,7 @@ python2 script/sv_filter.py --vcf allsamples.svmerge.vcf --prefix allsamples.svm
 python3 script/svannot.py --bed annot/allsamples.svmerge.bed --prefix Tibetan-Han --ref_version hg19 --db annovar.database/humandb/ --annovar table_annovar.pl --outdir annot/ > annovar.log 2>&1
 
 ## B: merge g1000
-# wget ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/phase3/integrated_sv_map/ALL.wgs.integrated_sv_map_v2.20130502.svs.genotypes.vcf.gz
+# wget ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/phase3/integrated_sv_map/ALL.wgs.integrated_sv_map_v2.20130502.svs.genotypes.vcf.gz # now: ALL.wgs.mergedSV.v8.20130502.svs.genotypes.vcf.gz
 echo -e "allsamples.svmerge.vcf\nALL.wgs.integrated_sv_map_v2.20130502.svs.genotypes.1000genome.vcf" >fofn2
 dbSV_merge -f fofn2 -l 2 -r 0.5 -o g1000mergevcf >mergelog2 2>&1
 python script/mergevcf2vcf1000intersect.py g1000mergevcf fofn2 >usandgenotypes.1000genomeintersect.vcf
